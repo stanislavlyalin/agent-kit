@@ -21,7 +21,8 @@ def main():
     with NamedTemporaryFile("w", encoding="utf-8", delete=False) as temporary:
         temporary.write(content)
 
-    destination = input("Путь для копирования AGENTS.md: ")
+    destination = Path(input("Каталог для копирования AGENTS.md: ").strip('"'))
+    destination /= agents.name
     copyfile(temporary.name, destination)
     Path(temporary.name).unlink()
 
