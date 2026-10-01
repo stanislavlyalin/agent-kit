@@ -6,10 +6,6 @@ error() {
     exit 1
 }
 
-prompt() {
-    printf '%s' "$1" >&2
-}
-
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     error "Ошибка: скрипт нужно запускать внутри Git-репозитория."
 fi
@@ -18,28 +14,51 @@ if ! git rev-parse --verify HEAD^{commit} >/dev/null 2>&1; then
     error "Ошибка: в репозитории нет коммитов для ревью."
 fi
 
+branch_ref() {
+    local name="$1"
+
+    if git show-ref --verify --quiet "refs/heads/$name"; then
+        printf '%s\n' "$name"
+    elif git show-ref --verify --quiet "refs/remotes/$name"; then
+        printf '%s\n' "$name"
+    else
+        return 1
+    fi
+}
+
 branch_base() {
-    local current_branch upstream candidate merge_base
+    local branch="$1" target upstream candidate merge_base remote
 
-    current_branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)
-
-    if upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null); then
-        merge_base=$(git merge-base HEAD "$upstream") || return 1
+    target=$(git rev-parse --verify "$branch^{commit}")
+    upstream=$(git for-each-ref --format='%(upstream:short)' "refs/heads/$branch")
+    if [ -n "$upstream" ]; then
+        merge_base=$(git merge-base "$target" "$upstream") || return 1
         printf '%s\n' "$merge_base"
         return
     fi
 
+    if [[ "$branch" == */* ]]; then
+        remote=${branch%%/*}
+        candidate=$(git symbolic-ref --quiet --short "refs/remotes/$remote/HEAD" 2>/dev/null || true)
+        if [ -n "$candidate" ]; then
+            merge_base=$(git merge-base "$target" "$candidate") || return 1
+            printf '%s\n' "$merge_base"
+            return
+        fi
+    fi
+
     while IFS= read -r candidate; do
         [ -n "$candidate" ] || continue
-        merge_base=$(git merge-base HEAD "$candidate") || continue
+        [ "$candidate" = "$branch" ] && continue
+        merge_base=$(git merge-base "$target" "$candidate") || continue
         printf '%s\n' "$merge_base"
         return
     done < <(git for-each-ref --format='%(refname:short)' 'refs/remotes/*/HEAD')
 
     for candidate in main master origin/main origin/master; do
-        [ "$candidate" = "$current_branch" ] && continue
+        [ "$candidate" = "$branch" ] && continue
         if git rev-parse --verify --quiet "$candidate^{commit}" >/dev/null; then
-            merge_base=$(git merge-base HEAD "$candidate") || continue
+            merge_base=$(git merge-base "$target" "$candidate") || continue
             printf '%s\n' "$merge_base"
             return
         fi
@@ -48,49 +67,33 @@ branch_base() {
     return 1
 }
 
-prompt $'Что вы хотите посмотреть?\n\n1) Все изменения текущей ветки\n2) Последний коммит\n3) Последние N коммитов\n4) Конкретный коммит\n\nВыбор: '
-read -r choice || error "Ошибка: не удалось прочитать выбор."
+[ "$#" -eq 1 ] || error "Использование: select-review-scope.sh <имя-ветки|число-коммитов|хеш-коммита>."
+scope="$1"
 
-case "$choice" in
-    1)
-        base=$(branch_base) || error "Ошибка: не удалось надёжно определить ветку-основу. Укажите base branch для ревью."
-        printf 'MODE=branch\nBASE=%s\nHEAD=HEAD\n' "$base"
-        ;;
-    2)
-        git rev-parse --verify HEAD^ >/dev/null 2>&1 || error "Ошибка: у последнего коммита нет родителя; выберите все доступные коммиты."
-        printf 'MODE=last\nBASE=HEAD^\nHEAD=HEAD\n'
-        ;;
-    3)
-        prompt 'Сколько последних коммитов? '
-        read -r count || error "Ошибка: не удалось прочитать количество коммитов."
-        [[ "$count" =~ ^[1-9][0-9]*$ ]] || error "Ошибка: введите положительное целое число."
+if [[ "$scope" =~ ^[1-9][0-9]*$ ]]; then
+    total=$(git rev-list --count HEAD)
+    (( scope <= total )) || error "Ошибка: в истории только $total коммитов."
 
-        total=$(git rev-list --count HEAD)
-        (( count <= total )) || error "Ошибка: в истории только $total коммитов."
+    if (( scope == total )); then
+        base=$(git hash-object -t tree /dev/null)
+    else
+        base="HEAD~$scope"
+    fi
 
-        if (( count == total )); then
-            base=$(git hash-object -t tree /dev/null)
-        else
-            base="HEAD~$count"
-        fi
+    printf 'MODE=commits\nCOUNT=%s\nBASE=%s\nHEAD=HEAD\n' "$scope" "$base"
+elif [[ "$scope" =~ ^[0-9A-Fa-f]{4,64}$ ]]; then
+    target=$(git rev-parse --verify "$scope^{commit}" 2>/dev/null) || error "Ошибка: коммит с таким хешем не найден."
 
-        printf 'MODE=commits\nCOUNT=%s\nBASE=%s\nHEAD=HEAD\n' "$count" "$base"
-        ;;
-    4)
-        prompt 'Хеш коммита: '
-        read -r commit || error "Ошибка: не удалось прочитать хеш коммита."
-        [[ "$commit" =~ ^[0-9A-Fa-f]{4,64}$ ]] || error "Ошибка: введите хеш коммита."
-        target=$(git rev-parse --verify "$commit^{commit}" 2>/dev/null) || error "Ошибка: коммит с таким хешем не найден."
+    if base=$(git rev-parse --verify "$target^" 2>/dev/null); then
+        :
+    else
+        base=$(git hash-object -t tree /dev/null)
+    fi
 
-        if base=$(git rev-parse --verify "$target^" 2>/dev/null); then
-            :
-        else
-            base=$(git hash-object -t tree /dev/null)
-        fi
-
-        printf 'MODE=commit\nCOMMIT=%s\nBASE=%s\nHEAD=%s\n' "$target" "$base" "$target"
-        ;;
-    *)
-        error "Ошибка: выберите 1, 2, 3 или 4."
-        ;;
-esac
+    printf 'MODE=commit\nCOMMIT=%s\nBASE=%s\nHEAD=%s\n' "$target" "$base" "$target"
+else
+    branch=$(branch_ref "$scope") || error "Ошибка: ветка с таким именем не найдена."
+    target=$(git rev-parse --verify "$branch^{commit}")
+    base=$(branch_base "$branch") || error "Ошибка: не удалось надёжно определить ветку-основу для $branch."
+    printf 'MODE=branch\nBRANCH=%s\nBASE=%s\nHEAD=%s\n' "$branch" "$base" "$target"
+fi
