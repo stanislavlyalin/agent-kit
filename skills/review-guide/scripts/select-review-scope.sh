@@ -48,7 +48,7 @@ branch_base() {
     return 1
 }
 
-prompt $'Что вы хотите посмотреть?\n\n1) Все изменения текущей ветки\n2) Последний коммит\n3) Последние N коммитов\n\nВыбор: '
+prompt $'Что вы хотите посмотреть?\n\n1) Все изменения текущей ветки\n2) Последний коммит\n3) Последние N коммитов\n4) Конкретный коммит\n\nВыбор: '
 read -r choice || error "Ошибка: не удалось прочитать выбор."
 
 case "$choice" in
@@ -76,7 +76,21 @@ case "$choice" in
 
         printf 'MODE=commits\nCOUNT=%s\nBASE=%s\nHEAD=HEAD\n' "$count" "$base"
         ;;
+    4)
+        prompt 'Хеш коммита: '
+        read -r commit || error "Ошибка: не удалось прочитать хеш коммита."
+        [[ "$commit" =~ ^[0-9A-Fa-f]{4,64}$ ]] || error "Ошибка: введите хеш коммита."
+        target=$(git rev-parse --verify "$commit^{commit}" 2>/dev/null) || error "Ошибка: коммит с таким хешем не найден."
+
+        if base=$(git rev-parse --verify "$target^" 2>/dev/null); then
+            :
+        else
+            base=$(git hash-object -t tree /dev/null)
+        fi
+
+        printf 'MODE=commit\nCOMMIT=%s\nBASE=%s\nHEAD=%s\n' "$target" "$base" "$target"
+        ;;
     *)
-        error "Ошибка: выберите 1, 2 или 3."
+        error "Ошибка: выберите 1, 2, 3 или 4."
         ;;
 esac
