@@ -1,0 +1,3 @@
+interface:
+  display_name: "Активное ревью"
+  short_description: "Тест на понимание Git-изменений и разбор ответов"
