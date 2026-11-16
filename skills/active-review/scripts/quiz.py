@@ -8,8 +8,6 @@ import subprocess
 import tempfile
 
 
-MIN_QUESTIONS = 5
-MAX_QUESTIONS = 15
 VERDICTS = ("верно", "частично верно", "неверно")
 
 
@@ -169,11 +167,12 @@ def load_questions(state, questions):
     if state["scope"] is None or state["questions"]:
         raise ValueError("Нужен выбранный диапазон без ранее загруженных вопросов")
     limit = state.get("question_limit")
-    minimum, maximum = (MIN_QUESTIONS, MAX_QUESTIONS) if limit is None else (1, limit)
-    if type(maximum) is not int or maximum < 1:
+    if limit is not None and (type(limit) is not int or limit < 1):
         raise ValueError("Лимит должен быть положительным целым числом")
-    if not isinstance(questions, list) or not minimum <= len(questions) <= maximum:
-        raise ValueError(f"Нужно от {minimum} до {maximum} вопросов")
+    if not isinstance(questions, list) or not questions:
+        raise ValueError("Нужен хотя бы один вопрос")
+    if limit is not None and len(questions) > limit:
+        raise ValueError(f"Нужно не больше {limit} вопросов")
     ids = set()
     for question in questions:
         identifier = text(question["id"])

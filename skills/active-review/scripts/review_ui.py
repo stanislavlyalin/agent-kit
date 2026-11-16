@@ -1,4 +1,4 @@
-"""Опрос в отдельной вкладке GNOME Terminal."""
+"""Опрос в отдельной окне GNOME Terminal."""
 
 import argparse
 from contextlib import redirect_stdout
@@ -110,7 +110,7 @@ def run(screen, path):
             screen,
             "Сколько вопросов подготовить?",
             [
-                "Агент решит сам (5–15 вопросов)",
+                "Агент решит сам",
                 "Указать число-лимит",
             ],
         )[0]
@@ -228,17 +228,23 @@ def main():
             "--environment",
             str(envfile),
         ]
-        subprocess.run(
+        try:
+            subprocess.run(
             [
                 "gnome-terminal",
                 "--zoom=1.5",
-                "--tab",
+                "--window",
                 "--title=Активное ревью",
                 "--",
                 *cmd,
             ],
             check=True,
         )
+        except (OSError, subprocess.CalledProcessError) as error:
+            print(f"Не удалось открыть окно терминала: {error}")
+            import shlex
+            print("Для продолжения с теми же прокси выполните: " + shlex.join(cmd))
+            return
         return
     if args.environment:
         values = json.loads(args.environment.read_text())

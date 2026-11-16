@@ -1,5 +1,8 @@
 """Оценка и просмотр результатов без возврата в диалог агента."""
 
+import csv
+from datetime import datetime, timezone
+import fcntl
 import json
 from pathlib import Path
 import subprocess
@@ -12,7 +15,9 @@ import quiz
 def evaluate(path, state, progress):
     saved = path.parent / "results.json"
     if saved.exists():
-        return json.loads(saved.read_text())
+        result = json.loads(saved.read_text())
+        save_history(state, result, saved)
+        return result
     pending = [
         (q, a)
         for q, a in zip(state["questions"], state["answers"])
@@ -127,10 +132,44 @@ def evaluate(path, state, progress):
         "results": rows,
         "head": state["scope"]["head"],
     }
+    result["score"] = round(5 * (result["counts"]["верно"] + 0.5 * result["counts"]["частично верно"]) / len(rows), 1)
+    result["date"] = datetime.now(timezone.utc).isoformat()
+    save_history(state, result, saved)
     temporary = saved.with_suffix(".tmp")
     temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2))
     temporary.replace(saved)
     return result
+
+
+def save_history(state, result, saved):
+    if "score" not in result:
+        counts = result["counts"]
+        result["score"] = round(5 * (counts["верно"] + 0.5 * counts["частично верно"]) / sum(counts.values()), 1)
+        result["date"] = datetime.now(timezone.utc).isoformat()
+    # Кеш сохраняется до CSV, чтобы повтор записи не вызывал новую оценку.
+    temporary = saved.with_suffix(".tmp")
+    temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2))
+    temporary.replace(saved)
+    scope = state["scope"]
+    stats = quiz.git(state["repo"], "diff", "--numstat", scope["tree_base"], scope["head"], "--")
+    added = deleted = 0
+    for line in stats.splitlines():
+        a, d, _ = line.split("\t", 2)
+        if a != "-" and d != "-":
+            added += int(a)
+            deleted += int(d)
+    history = Path(__file__).resolve().parent.parent / "test-results.csv"
+    with history.open("a+", newline="", encoding="utf-8") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        stream.seek(0)
+        existing = list(csv.DictReader(stream))
+        if any(row["date"] == result["date"] for row in existing):
+            return
+        stream.seek(0, 2)
+        writer = csv.writer(stream)
+        if stream.tell() == 0:
+            writer.writerow(["date", "added_lines", "deleted_lines", "score"])
+        writer.writerow([result["date"], added, deleted, result["score"]])
 
 
 def answer_lines(row):
@@ -149,7 +188,7 @@ def display(screen, result):
     offset = 0
     while True:
         height, width = screen.getmaxyx()
-        lines = ["РЕЗУЛЬТАТ", str(result["counts"]), "Ревизия: " + result["head"], ""]
+        lines = ["РЕЗУЛЬТАТ", str(result["counts"]), "Оценка: " + str(result["score"]).replace(".", ",") + " из 5", "Ревизия: " + result["head"], ""]
         for number, row in enumerate(result["results"], 1):
             texts = [
                 f"{number}. {row['prompt']} — {row['verdict']}",
